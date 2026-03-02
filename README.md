@@ -22,3 +22,11 @@ To set up Mobile Message in CiviCRM:
 
 To receive inbound messages, set your **Inbound URL** in the Mobile Message portal to:
 `https://your-site.org/?page=CiviCRM&q=civicrm%2Fsms%2Fcallback&provider=org.civicrm.sms.mobilemessage`
+
+
+## Development
+
+Testing webhooks:
+
+curl  -d '{"sender": "61404040404", "message": "inbound message test", "type": "inbound"}' -X POST -v 'http://localhost/?page=CiviCRM&q=civicrm%2Fsms%2Fcallback&provider=org.civicrm.sms.mobilemessage&provider=org.civicrm.sms.mobilemessage' 
+
