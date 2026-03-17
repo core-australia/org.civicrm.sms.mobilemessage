@@ -13,7 +13,9 @@ To set up Mobile Message in CiviCRM:
 3.  Set **Name** to `Mobile Message`.
 4.  Set **SMS Provider Name** to `MobileMessage`.
 5.  Enter your **Username** and **Password** from your Mobile Message API account.
-6.  In the **API Parameters** field, add:
+6.  API Type: http
+7.  API Url: https://api.mobilemessage.com.au/v1/messages
+8.  In the **API Parameters** field, add:
     `From=YourSenderID`
     *   *Note: `YourSenderID` can be a mobile number (e.g., `0412345678`) or an Alphanumeric Sender ID (up to 11 characters).*
     *   *Tip: You can provide multiple numbers separated by a pipe (e.g., `From=0411111111|0422222222`) to rotate between them randomly.*
