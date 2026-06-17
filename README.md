@@ -23,12 +23,14 @@ To set up Mobile Message in CiviCRM:
 ## Webhooks
 
 To receive inbound messages, set your **Inbound URL** in the Mobile Message portal to:
-`https://your-site.org/?page=CiviCRM&q=civicrm%2Fsms%2Fcallback&provider=org.civicrm.sms.mobilemessage`
-
+`https://your-domain/civicrm/sms/callback?provider=org.civicrm.sms.mobilemessage`
 
 ## Development
 
-Testing webhooks:
+Testing webhooks locally (adjust host/port to match your site):
 
-curl  -d '{"sender": "61404040404", "message": "inbound message test", "type": "inbound"}' -X POST -v 'http://localhost/?page=CiviCRM&q=civicrm%2Fsms%2Fcallback&provider=org.civicrm.sms.mobilemessage&provider=org.civicrm.sms.mobilemessage' 
+```bash
+curl -d '{"sender": "61404040404", "message": "inbound message test", "type": "inbound"}' -X POST 'http://localhost:18001/civicrm/sms/callback?provider=org.civicrm.sms.mobilemessage'
+```
 
+A successful response is plain text: `OK`.
