@@ -22,15 +22,31 @@ To set up Mobile Message in CiviCRM:
 
 ## Webhooks
 
-To receive inbound messages, set your **Inbound URL** in the Mobile Message portal to:
+To receive inbound messages, set your **Inbound Message Webhook** in the Mobile Message portal to:
 `https://your-domain/civicrm/sms/callback?provider=org.civicrm.sms.mobilemessage`
 
+You may leave **Message status** blank, or point it at the same URL — this extension
+detects delivery-status JSON payloads and does not create Inbound SMS activities for them.
+
+Inbound ingest is **idempotent**: the provider `message_id` (or a stable hash of
+sender/to/message/received_at) is stored on `civicrm_activity.result` and re-delivery
+is a no-op. Australian `61…` sender numbers are normalized to `0…` before contact match
+to avoid duplicate `@mobile.sms` contacts.
+
 ## Development
+
+Helper unit tests (no Civi bootstrap):
+
+```bash
+php tests/InboundHelpersTest.php
+```
+
+Manual regression steps: `tests/MANUAL_TEST_PLAN.md`.
 
 Testing webhooks locally (adjust host/port to match your site):
 
 ```bash
-curl -d '{"sender": "61404040404", "message": "inbound message test", "type": "inbound"}' -X POST 'http://localhost:18001/civicrm/sms/callback?provider=org.civicrm.sms.mobilemessage'
+curl -d '{"sender": "61404040404", "message": "inbound message test", "type": "inbound", "received_at": "2026-07-27 01:00:00"}' -X POST 'http://localhost:18001/civicrm/sms/callback?provider=org.civicrm.sms.mobilemessage'
 ```
 
 A successful response is plain text: `OK`.

@@ -152,7 +152,21 @@ class org_civicrm_sms_mobilemessage extends CRM_SMS_Provider
   {
     $rawData = file_get_contents('php://input');
     $data = json_decode($rawData, true);
+    return $this->processStatusPayload(is_array($data) ? $data : []);
+  }
 
+  /**
+   * Handle a delivery-status webhook payload.
+   *
+   * Core CRM_SMS_Page_Callback only routes to callback() when `status` is present
+   * in $_REQUEST. Mobile Message puts `status` in the JSON body, so status events
+   * often land in inbound() instead — process them here without creating activities.
+   *
+   * @param array $data
+   * @return bool
+   */
+  protected function processStatusPayload(array $data)
+  {
     if (!$data) {
       return false;
     }
@@ -163,6 +177,9 @@ class org_civicrm_sms_mobilemessage extends CRM_SMS_Provider
     // CiviCRM doesn't have a standard built-in way to handle outbound delivery receipts in activity logs easily without custom tables,
     // but we can at least log it or update the activity if we had the ID mapping.
     // For now, return true as it's processed.
+    if ($messageID || $status) {
+      Civi::log()->debug("Mobile Message status webhook: message_id={$messageID} status={$status}");
+    }
     return true;
   }
 
@@ -170,8 +187,21 @@ class org_civicrm_sms_mobilemessage extends CRM_SMS_Provider
   {
     $rawData = file_get_contents('php://input');
     $data = json_decode($rawData, true);
+    if (!is_array($data)) {
+      echo 'OK';
+      CRM_Utils_System::civiExit();
+    }
 
-    $fromPhone = $data['sender'] ?? '';
+    // Status webhooks share this callback URL. Core only checks $_REQUEST for
+    // `status`, so JSON delivery receipts would otherwise create fake Inbound SMS
+    // activities (often against the wrong contact / @mobile.sms fallback).
+    if (\Civi\Mobilemessage\Inbound::isDeliveryStatusPayload($data)) {
+      $this->processStatusPayload($data);
+      echo 'OK';
+      CRM_Utils_System::civiExit();
+    }
+
+    $fromPhone = \Civi\Mobilemessage\Inbound::normalizeAustralianMobile($data['sender'] ?? '');
     $body = $data['message'] ?? '';
     $type = $data['type'] ?? 'inbound';
 
@@ -181,10 +211,46 @@ class org_civicrm_sms_mobilemessage extends CRM_SMS_Provider
       $body = 'STOP';
     }
 
-    // Use message_id as the primary external identifier for this inbound message.
-    // original_message_id is the ID of the message this is replying to.
-    $externalID = $data['message_id'] ?? ($data['original_message_id'] ?? null);
+    // Prefer provider inbound message_id when present (GET /v1/inbound / future webhooks).
+    // Do NOT use original_message_id alone — that is the outbound ID and would collide
+    // across multiple replies to the same send. Fall back to a stable hash of the
+    // inbound webhook fields documented by Mobile Message.
+    $externalID = \Civi\Mobilemessage\Inbound::buildInboundTrackId($data);
 
-    return parent::processInbound($fromPhone, $body, null, $externalID);
+    $existing = $this->findInboundByTrackId($externalID);
+    if ($existing) {
+      Civi::log()->info("Mobile Message inbound SMS already recorded (track_id={$externalID}); skipping duplicate.");
+      echo 'OK';
+      CRM_Utils_System::civiExit();
+    }
+
+    parent::processInbound($fromPhone, $body, null, $externalID);
+    echo 'OK';
+    CRM_Utils_System::civiExit();
+  }
+
+  /**
+   * @return array|null Existing Inbound SMS activity row, or NULL.
+   */
+  protected function findInboundByTrackId(string $trackId)
+  {
+    if ($trackId === '') {
+      return NULL;
+    }
+    try {
+      $result = civicrm_api3('Activity', 'get', [
+        'sequential' => 1,
+        'activity_type_id' => 'Inbound SMS',
+        'result' => $trackId,
+        'options' => ['limit' => 1],
+      ]);
+      if (!empty($result['values'][0])) {
+        return $result['values'][0];
+      }
+    }
+    catch (Exception $e) {
+      Civi::log()->warning('Mobile Message inbound dedupe lookup failed: ' . $e->getMessage());
+    }
+    return NULL;
   }
 }

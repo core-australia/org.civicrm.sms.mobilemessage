@@ -15,8 +15,8 @@
     <author>Community Contributed</author>
     <email>info@civicrm.org</email>
   </maintainer>
-  <releaseDate>2025-12-28</releaseDate>
-  <version>1.0.1</version>
+  <releaseDate>2026-07-27</releaseDate>
+  <version>1.0.2</version>
   <develStage>stable</develStage>
   <compatibility>
     <ver>5.0</ver>
