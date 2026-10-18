@@ -21,6 +21,7 @@ There is **no** polling job in this extension; inbound is webhook-only. Leave th
 
 ```bash
 php tests/InboundHelpersTest.php
+php tests/WebhookSignatureTest.php
 ```
 
 ## Manual (local or staging site with Mobile Message)
@@ -66,3 +67,27 @@ curl -sS -X POST 'https://<site>/civicrm/sms/callback?provider=org.civicrm.sms.m
 ```
 
 Expect `OK` and **no** new Inbound SMS activity.
+
+## Webhook signing (when SigningSecret / MM_WEBHOOK_SECRET is set)
+
+1. Add `SigningSecret=abc123` to the SMS provider API Parameters (or set
+   `MM_WEBHOOK_SECRET=abc123` on the site).
+2. Unsigned POST to the callback URL must return **HTTP 400** (missing headers).
+3. Signed POST with a fresh timestamp must return `OK` and create one Inbound SMS:
+
+```bash
+TS=$(date +%s)
+BODY='{"to":"61400000010","sender":"61412345678","message":"sign-test-001","received_at":"2026-07-27 01:00:00","type":"inbound"}'
+SIG=$(php -r 'echo hash_hmac("sha256", $argv[1] . "." . $argv[2], "abc123");' "$TS" "$BODY")
+curl -sS -o /tmp/mm-body -w '%{http_code}' -X POST \
+  -H "Content-Type: application/json" \
+  -H "X-MM-Timestamp: $TS" -H "X-MM-Signature: $SIG" \
+  -d "$BODY" \
+  'https://<site>/civicrm/sms/callback?provider=org.civicrm.sms.mobilemessage'
+```
+
+Expect HTTP **200** and body `OK`.
+
+4. Same body with a wrong signature must return **HTTP 401**.
+5. Remove the secret (or leave SigningSecret unset) and confirm unsigned webhooks
+   still work (backward compatible).

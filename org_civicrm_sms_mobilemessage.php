@@ -11,6 +11,16 @@ class org_civicrm_sms_mobilemessage extends CRM_SMS_Provider
   public $_apiURL = 'https://api.mobilemessage.com.au/v1/messages';
 
   /**
+   * Cached raw webhook body + decoded JSON for this request.
+   *
+   * php://input can only be read once, and both inbound() and callback() need it
+   * (including for HMAC verification against the exact bytes posted).
+   *
+   * @var array|null
+   */
+  private static $_webhookPayload = NULL;
+
+  /**
    * We only need one instance of this object. So we use the singleton
    * pattern and cache the instance in this variable
    *
@@ -150,8 +160,7 @@ class org_civicrm_sms_mobilemessage extends CRM_SMS_Provider
 
   function callback()
   {
-    $rawData = file_get_contents('php://input');
-    $data = json_decode($rawData, true);
+    $data = $this->readWebhookPayload();
     return $this->processStatusPayload(is_array($data) ? $data : []);
   }
 
@@ -185,8 +194,7 @@ class org_civicrm_sms_mobilemessage extends CRM_SMS_Provider
 
   function inbound()
   {
-    $rawData = file_get_contents('php://input');
-    $data = json_decode($rawData, true);
+    $data = $this->readWebhookPayload();
     if (!is_array($data)) {
       echo 'OK';
       CRM_Utils_System::civiExit();
@@ -203,6 +211,7 @@ class org_civicrm_sms_mobilemessage extends CRM_SMS_Provider
 
     $fromPhone = \Civi\Mobilemessage\Inbound::normalizeAustralianMobile($data['sender'] ?? '');
     $body = $data['message'] ?? '';
+    $toPhone = $data['to'] ?? NULL;
     $type = $data['type'] ?? 'inbound';
 
     // If Mobile Message identifies this as an unsubscribe event,
@@ -224,9 +233,152 @@ class org_civicrm_sms_mobilemessage extends CRM_SMS_Provider
       CRM_Utils_System::civiExit();
     }
 
-    parent::processInbound($fromPhone, $body, null, $externalID);
+    parent::processInbound($fromPhone, $body, $toPhone, $externalID);
     echo 'OK';
     CRM_Utils_System::civiExit();
+  }
+
+  /**
+   * Read the raw webhook body once, verify HMAC if a secret is configured, decode JSON.
+   *
+   * @return array|false
+   */
+  protected function readWebhookPayload()
+  {
+    if (self::$_webhookPayload !== NULL) {
+      return self::$_webhookPayload['data'] ?? FALSE;
+    }
+
+    $rawBody = file_get_contents('php://input');
+    if ($rawBody === FALSE) {
+      $rawBody = '';
+    }
+
+    $this->verifyWebhookSignature($rawBody);
+
+    $data = json_decode($rawBody, TRUE);
+    self::$_webhookPayload = [
+      'raw' => $rawBody,
+      'data' => is_array($data) ? $data : FALSE,
+    ];
+    return self::$_webhookPayload['data'];
+  }
+
+  /**
+   * Verify X-MM-Timestamp / X-MM-Signature when a signing secret is configured.
+   *
+   * Signing is optional: if no secret is set, unsigned webhooks still work.
+   * HMAC is SHA-256 of "{timestamp}.{raw_body}" with the secret as the key.
+   *
+   * @see https://help.mobilemessage.com.au/api/verifying-webhook-signatures
+   *
+   * @param string $rawBody
+   */
+  protected function verifyWebhookSignature($rawBody)
+  {
+    $allHeaders = function_exists('getallheaders') ? getallheaders() : NULL;
+    $headers = \Civi\Mobilemessage\WebhookSignature::headersFromRequest($_SERVER, $allHeaders);
+    $secrets = $this->getWebhookSigningSecrets();
+    if (empty($secrets)) {
+      if ($headers['timestamp'] !== '' || $headers['signature'] !== '') {
+        $this->logWebhook('Mobile Message webhook has signature headers but no SigningSecret / MM_WEBHOOK_SECRET is configured; skipping verification');
+      }
+      return;
+    }
+
+    $timestamp = $headers['timestamp'];
+    $signature = $headers['signature'];
+
+    if ($timestamp === '' || $signature === '') {
+      $this->rejectWebhook(400, 'Mobile Message webhook missing signature headers');
+    }
+
+    if (!\Civi\Mobilemessage\WebhookSignature::timestampIsFresh($timestamp)) {
+      $this->rejectWebhook(400, 'Mobile Message webhook timestamp out of range');
+    }
+
+    foreach ($secrets as $secret) {
+      if (\Civi\Mobilemessage\WebhookSignature::matches($secret, $timestamp, $rawBody, $signature)) {
+        return;
+      }
+    }
+
+    $this->rejectWebhook(401, 'Mobile Message webhook signature mismatch');
+  }
+
+  /**
+   * Signing secrets from SMS provider API Parameters and/or MM_WEBHOOK_SECRET.
+   *
+   * API Parameters (one per line; do not pipe-separate — secrets may contain |):
+   *   SigningSecret=...
+   *   SigningSecretPrevious=...   (optional, for rotation)
+   *
+   * @return string[]
+   */
+  protected function getWebhookSigningSecrets()
+  {
+    $secrets = [];
+
+    if (class_exists('CRM_SMS_BAO_Provider')) {
+      try {
+        $filter = ['name' => 'org.civicrm.sms.mobilemessage'];
+        $providers = CRM_SMS_BAO_Provider::getProviders(NULL, $filter, TRUE);
+        if (is_array($providers)) {
+          foreach ($providers as $provider) {
+            $secrets = array_merge(
+              $secrets,
+              \Civi\Mobilemessage\WebhookSignature::secretsFromApiParams($provider['api_params'] ?? '')
+            );
+          }
+        }
+      }
+      catch (Exception $e) {
+        $this->logWebhook('Mobile Message could not load SMS providers for webhook secrets: ' . $e->getMessage());
+      }
+    }
+
+    if (!empty($this->_providerInfo['api_params'])) {
+      $secrets = array_merge(
+        $secrets,
+        \Civi\Mobilemessage\WebhookSignature::secretsFromApiParams($this->_providerInfo['api_params'])
+      );
+    }
+
+    $env = getenv('MM_WEBHOOK_SECRET');
+    if (is_string($env)) {
+      $env = trim($env);
+      if ($env !== '') {
+        $secrets[] = $env;
+      }
+    }
+
+    return array_values(array_unique($secrets));
+  }
+
+  /**
+   * @param string $message
+   */
+  protected function logWebhook($message)
+  {
+    if (class_exists('Civi')) {
+      Civi::log()->warning($message);
+    }
+  }
+
+  /**
+   * @param int $status
+   * @param string $message
+   */
+  protected function rejectWebhook($status, $message)
+  {
+    $this->logWebhook($message);
+    http_response_code((int) $status);
+    // civiExit($status>0) forces HTTP 500 — keep our 400/401 and only use it
+    // for session/dispatch cleanup.
+    if (class_exists('CRM_Utils_System')) {
+      CRM_Utils_System::civiExit(0);
+    }
+    exit;
   }
 
   /**
