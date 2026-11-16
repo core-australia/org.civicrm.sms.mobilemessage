@@ -101,7 +101,8 @@ class org_civicrm_sms_mobilemessage extends CRM_SMS_Provider
 
     $to = $header['To'] ?? '';
     if (empty($to)) {
-      return PEAR::raiseError('No recipient specified', 0, PEAR_ERROR_RETURN);
+      // Throw so Mass SMS (SMSJob) and the SMS form skip "delivered"; they ignore PEAR returns.
+      throw new CRM_Core_Exception('No recipient specified');
     }
 
     $data = [
@@ -129,21 +130,20 @@ class org_civicrm_sms_mobilemessage extends CRM_SMS_Provider
     curl_close($ch);
 
     if ($err) {
-      return PEAR::raiseError("CURL Error: $err", 0, PEAR_ERROR_RETURN);
+      throw new CRM_Core_Exception("CURL Error: $err");
     }
 
-    $result = json_decode($response, true);
-    if ($httpCode >= 400 || (isset($result['status']) && $result['status'] === 'error')) {
-      $errMsg = $result['message'] ?? $response;
-      return PEAR::raiseError("Mobile Message API Error: $errMsg", $httpCode, PEAR_ERROR_RETURN);
+    // HTTP 200 does not mean accepted: blocked (unsubscribed) and per-message
+    // errors come back inside results[]. Only success + message_id counts.
+    // Throw CRM_Core_Exception (not PEAR): sendSMSMessage() discards PEAR returns,
+    // and SMSJob::deliverGroup() only catches CRM_Core_Exception — so Mass SMS and
+    // the SMS form only skip "delivered" / count a failure when we throw.
+    $outcome = \Civi\Mobilemessage\SendResult::interpret((int) $httpCode, $response);
+    if (!$outcome['ok']) {
+      throw new CRM_Core_Exception($outcome['error']);
     }
 
-    // Capture first message_id for CiviCRM
-    $messageID = '';
-    if (!empty($result['results'][0]['message_id'])) {
-      $messageID = $result['results'][0]['message_id'];
-    }
-
+    $messageID = $outcome['message_id'];
     $this->createActivity($messageID, $message, $header, $jobID, $userID);
     return $messageID;
   }

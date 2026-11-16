@@ -66,3 +66,38 @@ curl -sS -X POST 'https://<site>/civicrm/sms/callback?provider=org.civicrm.sms.m
 ```
 
 Expect `OK` and **no** new Inbound SMS activity.
+
+# Manual regression: outbound send result handling
+
+## Context
+
+Mobile Message answers HTTP 200 for a rejected message and reports the outcome per
+message in `results[].status` (`success`, `blocked`, `error`). `send()` now treats a
+send as accepted only when `results[0].status` is `success` **and** a `message_id` is
+present; anything else throws `CRM_Core_Exception` and creates **no** "SMS delivery"
+activity. Throwing (not returning PEAR) is required so Mass SMS and the SMS form skip
+marking the recipient delivered — those paths ignore PEAR returns.
+
+## Automated
+
+```bash
+php tests/SendResultTest.php
+```
+
+## Manual (staging site with a real Mobile Message account — you will send real SMS)
+
+Use test handsets you own. Do not use real constituent numbers.
+
+| #   | Recipient                                                     | Expected                                                                                                                                  |
+| --- | ------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | A valid mobile that has not opted out                         | Send succeeds, handset receives the text, exactly **one** "SMS delivery" activity with `result` = the Mobile Message `message_id`.        |
+| 2   | A handset that has replied **STOP** (unsubscribed)            | Send fails with "Message not sent: the recipient has unsubscribed from SMS." No text delivered, **no** new "SMS delivery" activity.       |
+| 3   | An invalid number (e.g. `0412 345` or a non-existent country) | Send fails with "Message not sent: <API error text>" (or the generic rejected message). No text delivered, **no** new activity created.   |
+
+Notes:
+
+- `ignore_unsubscribes` is deliberately not set, so case 2 relies on Mobile Message's
+  default filtering.
+- Mass SMS: failed recipients must **not** appear under Delivered; the reason is in the
+  Civi debug log (`Failed to send SMS message…`), not on the mailing report UI.
+- Single SMS form: expect an on-screen / returned error with the same message text.
