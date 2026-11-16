@@ -136,6 +136,13 @@ class org_civicrm_sms_mobilemessage extends CRM_SMS_Provider
     // errors come back inside results[]. Only success + message_id counts.
     $outcome = \Civi\Mobilemessage\SendResult::interpret((int) $httpCode, $response);
     if (!$outcome['ok']) {
+      // TODO(tech lead decision): this returns a PEAR error, as the other error
+      // paths do, but CiviCRM core ignores it: CRM_Activity_BAO_Activity::sendSMSMessage()
+      // discards send()'s return value and CRM_Mailing_BAO_SMSJob::deliverGroup() only
+      // catches CRM_Core_Exception, so the core SMS form and Mass SMS still count a
+      // blocked/errored send as sent. Callers using the SMS API must check
+      // PEAR::isError(). Decide whether to also throw CRM_Core_Exception here so
+      // core's own paths report the failure (a behaviour change for Mass SMS).
       return PEAR::raiseError($outcome['error'], $httpCode, PEAR_ERROR_RETURN);
     }
 
