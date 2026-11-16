@@ -101,7 +101,8 @@ class org_civicrm_sms_mobilemessage extends CRM_SMS_Provider
 
     $to = $header['To'] ?? '';
     if (empty($to)) {
-      return PEAR::raiseError('No recipient specified', 0, PEAR_ERROR_RETURN);
+      // Throw so Mass SMS (SMSJob) and the SMS form skip "delivered"; they ignore PEAR returns.
+      throw new CRM_Core_Exception('No recipient specified');
     }
 
     $data = [
@@ -129,21 +130,17 @@ class org_civicrm_sms_mobilemessage extends CRM_SMS_Provider
     curl_close($ch);
 
     if ($err) {
-      return PEAR::raiseError("CURL Error: $err", 0, PEAR_ERROR_RETURN);
+      throw new CRM_Core_Exception("CURL Error: $err");
     }
 
     // HTTP 200 does not mean accepted: blocked (unsubscribed) and per-message
     // errors come back inside results[]. Only success + message_id counts.
+    // Throw CRM_Core_Exception (not PEAR): sendSMSMessage() discards PEAR returns,
+    // and SMSJob::deliverGroup() only catches CRM_Core_Exception — so Mass SMS and
+    // the SMS form only skip "delivered" / count a failure when we throw.
     $outcome = \Civi\Mobilemessage\SendResult::interpret((int) $httpCode, $response);
     if (!$outcome['ok']) {
-      // TODO(tech lead decision): this returns a PEAR error, as the other error
-      // paths do, but CiviCRM core ignores it: CRM_Activity_BAO_Activity::sendSMSMessage()
-      // discards send()'s return value and CRM_Mailing_BAO_SMSJob::deliverGroup() only
-      // catches CRM_Core_Exception, so the core SMS form and Mass SMS still count a
-      // blocked/errored send as sent. Callers using the SMS API must check
-      // PEAR::isError(). Decide whether to also throw CRM_Core_Exception here so
-      // core's own paths report the failure (a behaviour change for Mass SMS).
-      return PEAR::raiseError($outcome['error'], $httpCode, PEAR_ERROR_RETURN);
+      throw new CRM_Core_Exception($outcome['error']);
     }
 
     $messageID = $outcome['message_id'];

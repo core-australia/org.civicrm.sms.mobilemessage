@@ -74,7 +74,9 @@ Expect `OK` and **no** new Inbound SMS activity.
 Mobile Message answers HTTP 200 for a rejected message and reports the outcome per
 message in `results[].status` (`success`, `blocked`, `error`). `send()` now treats a
 send as accepted only when `results[0].status` is `success` **and** a `message_id` is
-present; anything else returns a PEAR error and creates **no** "SMS delivery" activity.
+present; anything else throws `CRM_Core_Exception` and creates **no** "SMS delivery"
+activity. Throwing (not returning PEAR) is required so Mass SMS and the SMS form skip
+marking the recipient delivered — those paths ignore PEAR returns.
 
 ## Automated
 
@@ -96,6 +98,6 @@ Notes:
 
 - `ignore_unsubscribes` is deliberately not set, so case 2 relies on Mobile Message's
   default filtering.
-- CiviCRM core's own SMS form and Mass SMS jobs ignore a returned error from `send()`,
-  so for those paths check the absence of an "SMS delivery" activity (and the log), not
-  an on-screen failure. Callers using the SMS API should check the returned error.
+- Mass SMS: failed recipients must **not** appear under Delivered; the reason is in the
+  Civi debug log (`Failed to send SMS message…`), not on the mailing report UI.
+- Single SMS form: expect an on-screen / returned error with the same message text.
