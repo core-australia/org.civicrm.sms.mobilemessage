@@ -66,3 +66,36 @@ curl -sS -X POST 'https://<site>/civicrm/sms/callback?provider=org.civicrm.sms.m
 ```
 
 Expect `OK` and **no** new Inbound SMS activity.
+
+# Manual regression: outbound send result handling
+
+## Context
+
+Mobile Message answers HTTP 200 for a rejected message and reports the outcome per
+message in `results[].status` (`success`, `blocked`, `error`). `send()` now treats a
+send as accepted only when `results[0].status` is `success` **and** a `message_id` is
+present; anything else returns a PEAR error and creates **no** "SMS delivery" activity.
+
+## Automated
+
+```bash
+php tests/SendResultTest.php
+```
+
+## Manual (staging site with a real Mobile Message account — you will send real SMS)
+
+Use test handsets you own. Do not use real constituent numbers.
+
+| #   | Recipient                                                     | Expected                                                                                                                                  |
+| --- | ------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | A valid mobile that has not opted out                         | Send succeeds, handset receives the text, exactly **one** "SMS delivery" activity with `result` = the Mobile Message `message_id`.        |
+| 2   | A handset that has replied **STOP** (unsubscribed)            | Send fails with "Message not sent: the recipient has unsubscribed from SMS." No text delivered, **no** new "SMS delivery" activity.       |
+| 3   | An invalid number (e.g. `0412 345` or a non-existent country) | Send fails with "Message not sent: <API error text>" (or the generic rejected message). No text delivered, **no** new activity created.   |
+
+Notes:
+
+- `ignore_unsubscribes` is deliberately not set, so case 2 relies on Mobile Message's
+  default filtering.
+- CiviCRM core's own SMS form and Mass SMS jobs ignore a returned error from `send()`,
+  so for those paths check the absence of an "SMS delivery" activity (and the log), not
+  an on-screen failure. Callers using the SMS API should check the returned error.

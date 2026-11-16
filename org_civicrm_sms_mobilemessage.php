@@ -132,18 +132,14 @@ class org_civicrm_sms_mobilemessage extends CRM_SMS_Provider
       return PEAR::raiseError("CURL Error: $err", 0, PEAR_ERROR_RETURN);
     }
 
-    $result = json_decode($response, true);
-    if ($httpCode >= 400 || (isset($result['status']) && $result['status'] === 'error')) {
-      $errMsg = $result['message'] ?? $response;
-      return PEAR::raiseError("Mobile Message API Error: $errMsg", $httpCode, PEAR_ERROR_RETURN);
+    // HTTP 200 does not mean accepted: blocked (unsubscribed) and per-message
+    // errors come back inside results[]. Only success + message_id counts.
+    $outcome = \Civi\Mobilemessage\SendResult::interpret((int) $httpCode, $response);
+    if (!$outcome['ok']) {
+      return PEAR::raiseError($outcome['error'], $httpCode, PEAR_ERROR_RETURN);
     }
 
-    // Capture first message_id for CiviCRM
-    $messageID = '';
-    if (!empty($result['results'][0]['message_id'])) {
-      $messageID = $result['results'][0]['message_id'];
-    }
-
+    $messageID = $outcome['message_id'];
     $this->createActivity($messageID, $message, $header, $jobID, $userID);
     return $messageID;
   }
